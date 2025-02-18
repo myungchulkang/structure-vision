@@ -51,8 +51,25 @@ st.set_page_config(
     }
 )
 
+# from glob import glob
+# import streamlit as st
+#
+# paths = glob("/Users/lfoppiano/kDrive/library/articles/materials informatics/polymers/*.pdf")
+# for id, (tab,path) in enumerate(zip(st.tabs(paths),paths)):
+#     with tab:
+#         with st.container(height=600):
+#             pdf_viewer(path, width=500, render_text=True)
+
+
 with st.sidebar:
-    st.markdown("## Highlights controllers")
+    if st.session_state['binary']:
+        st.header("Annotation")
+        annotations_component = st.empty()
+    st.header("Text")
+    enable_text = st.toggle('Render text in PDF', value=False, disabled=not st.session_state['uploaded'],
+                            help="Enable the selection and copy-paste on the PDF")
+
+    st.header("Highlights")
     highlight_title = st.toggle('Title', value=True, disabled=not st.session_state['uploaded'])
     highlight_person_names = st.toggle('Person Names', value=True, disabled=not st.session_state['uploaded'])
     highlight_affiliations = st.toggle('Affiliations', value=True, disabled=not st.session_state['uploaded'])
@@ -65,13 +82,14 @@ with st.sidebar:
     highlight_callout = st.toggle('References citations in text', value=True, disabled=not st.session_state['uploaded'])
     highlight_citations = st.toggle('Citations', value=True, disabled=not st.session_state['uploaded'])
 
-    st.header("Display options")
+    st.header("Annotations")
     annotation_thickness = st.slider(label="Annotation boxes border thickness", min_value=1, max_value=6, value=1)
-    pages_vertical_spacing = st.slider(label="Pages vertical spacing", min_value=2, max_value=10, value=2)
+    pages_vertical_spacing = st.slider(label="Pages vertical spacing", min_value=0, max_value=10, value=2)
 
     st.header("Height and width")
+    resolution_boost = st.slider(label="Resolution boost", min_value=1, max_value=10, value=1)
     width = st.slider(label="PDF width", min_value=100, max_value=1000, value=700)
-    height = st.slider(label="PDF height", min_value=-1, max_value=10000, value=1000)
+    height = st.slider(label="PDF height", min_value=-1, max_value=10000, value=-1)
 
     st.header("Page Selection")
     placeholder = st.empty()
@@ -111,7 +129,7 @@ def init_grobid():
         coordinates=["p", "s", "persName", "biblStruct", "figure", "formula", "head", "note", "title", "ref",
                      "affiliation"],
         sleep_time=5,
-        timeout=60,
+        timeout=240,
         check_server=True
     )
     grobid_processor = GrobidProcessor(grobid_client)
@@ -121,6 +139,29 @@ def init_grobid():
 
 init_grobid()
 
+annotations_to_element = {
+    'p': 'Paragraph',
+    's': 'Sentence',
+    'persName': 'Person Name',
+    'biblStruct': 'Citation',
+    'graphic': 'Graphic bitmap',
+    'figure': 'Figure',
+    'formula': 'Formula',
+    'head': 'Head of section',
+    'note': 'Note',
+    'title': 'Title',
+    'ref': 'Reference callout',
+    'affiliation': 'Affiliation'
+}
+
+def my_custom_annotation_handler(annotation):
+    output_json = {
+        "Index": annotation['index'],
+        "Page": annotation['page'],
+        "Structure": annotations_to_element[annotation['type']],
+    }
+
+    annotations_component.json(output_json)
 
 def get_file_hash(fname):
     hash_md5 = blake2b()
@@ -140,16 +181,23 @@ uploaded_file = st.file_uploader("Upload an article",
 
 if uploaded_file:
     if not st.session_state['binary']:
+        response = None
         with (st.spinner('Reading file, calling Grobid...')):
             binary = uploaded_file.getvalue()
             tmp_file = NamedTemporaryFile()
             tmp_file.write(bytearray(binary))
             st.session_state['binary'] = binary
-            annotations, pages = init_grobid().process_structure(tmp_file.name)
+            response = init_grobid().process_structure(tmp_file.name)
 
-            st.session_state['annotations'] = annotations if not st.session_state['annotations'] else st.session_state[
-                'annotations']
-            st.session_state['pages'] = pages if not st.session_state['pages'] else st.session_state['pages']
+        if response is None:
+            st.error("Error processing the document, maybe the Grobid instance is overloaded. Please try again.")
+            st.stop()
+
+        annotations, pages = response
+
+        st.session_state['annotations'] = annotations if not st.session_state['annotations'] else st.session_state[
+            'annotations']
+        st.session_state['pages'] = pages if not st.session_state['pages'] else st.session_state['pages']
 
     if st.session_state['pages']:
         st.session_state['page_selection'] = placeholder.multiselect(
@@ -206,6 +254,9 @@ if uploaded_file:
                 pages_vertical_spacing=pages_vertical_spacing,
                 annotation_outline_size=annotation_thickness,
                 pages_to_render=st.session_state['page_selection'],
+                render_text=enable_text,
+                resolution_boost=resolution_boost,
+                on_annotation_click=my_custom_annotation_handler
             )
         else:
             pdf_viewer(
@@ -215,4 +266,7 @@ if uploaded_file:
                 pages_vertical_spacing=pages_vertical_spacing,
                 annotation_outline_size=annotation_thickness,
                 pages_to_render=st.session_state['page_selection'],
+                render_text=enable_text,
+                resolution_boost=resolution_boost,
+                on_annotation_click=my_custom_annotation_handler
             )
